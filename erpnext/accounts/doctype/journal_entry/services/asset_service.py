@@ -98,12 +98,22 @@ class AssetService:
 		depr_schedule = get_depr_schedule(asset.name, "Active", self.doc.finance_book)
 		precision = je_row.precision("debit")
 		for d in depr_schedule or []:
-			if (
-				d.schedule_date == self.doc.posting_date
-				and not d.journal_entry
-				and flt(d.depreciation_amount, precision) == flt(je_row.debit, precision)
+			if d.schedule_date != self.doc.posting_date or flt(d.depreciation_amount, precision) != flt(
+				je_row.debit, precision
 			):
-				frappe.db.set_value("Depreciation Schedule", d.name, "journal_entry", self.doc.name)
+				continue
+
+			if d.journal_entry:
+				frappe.throw(
+					_("Depreciation of {0} on {1} is already booked by {2}").format(
+						frappe.utils.get_link_to_form("Asset", asset.name),
+						frappe.utils.formatdate(d.schedule_date),
+						frappe.utils.get_link_to_form("Journal Entry", d.journal_entry),
+					),
+					title=_("Duplicate Depreciation Entry"),
+				)
+
+			frappe.db.set_value("Depreciation Schedule", d.name, "journal_entry", self.doc.name)
 
 	def update_asset_on_disposal(self) -> None:
 		"""Mark each referenced asset disposed (date + scrap entry) on an Asset Disposal."""

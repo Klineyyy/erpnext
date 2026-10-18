@@ -2,6 +2,7 @@
 # See license.txt
 
 import frappe
+from frappe.custom.doctype.custom_field.custom_field import create_custom_field
 from frappe.utils import (
 	add_days,
 	add_months,
@@ -2266,6 +2267,136 @@ class TestDepreciationBasics(AssetSetup):
 		# Verify original asset was updated
 		target_asset.reload()
 		self.assertEqual(target_asset.asset_quantity, 1)  # Remaining quantity
+
+
+class TestDepreciationWithWorkflow(AssetSetup):
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		# adding the workflow state field alters the table, which commits, so do it before any test data
+		if not frappe.get_meta("Journal Entry").has_field("workflow_state"):
+			create_custom_field(
+				"Journal Entry",
+				{
+					"fieldname": "workflow_state",
+					"label": "Workflow State",
+					"fieldtype": "Link",
+					"options": "Workflow State",
+					"hidden": 1,
+					"allow_on_submit": 1,
+					"no_copy": 1,
+				},
+			)
+
+	def setUp(self):
+		super().setUp()
+		make_journal_entry_workflow()
+
+	def test_depreciation_entry_not_duplicated_while_awaiting_approval(self):
+		asset = create_asset(
+			item_code="Macbook Pro",
+			calculate_depreciation=1,
+			available_for_use_date="2019-12-31",
+			depreciation_start_date="2020-12-31",
+			frequency_of_depreciation=12,
+			total_number_of_depreciations=3,
+			expected_value_after_useful_life=10000,
+			submit=1,
+		)
+
+		post_depreciation_entries(date="2022-06-01")
+		post_depreciation_entries(date="2022-06-01")
+
+		entries = get_depreciation_entries(asset.name)
+		self.assertEqual([e.posting_date for e in entries], [getdate("2020-12-31"), getdate("2021-12-31")])
+		self.assertEqual({e.docstatus for e in entries}, {0})
+
+	def test_second_depreciation_entry_for_booked_row_is_refused(self):
+		from frappe.model.workflow import apply_workflow
+
+		asset = create_asset(
+			item_code="Macbook Pro",
+			calculate_depreciation=1,
+			available_for_use_date="2019-12-31",
+			depreciation_start_date="2020-12-31",
+			frequency_of_depreciation=12,
+			total_number_of_depreciations=3,
+			expected_value_after_useful_life=10000,
+			submit=1,
+		)
+
+		post_depreciation_entries(date="2021-06-01")
+		draft = frappe.get_doc("Journal Entry", get_depreciation_entries(asset.name)[0].name)
+		duplicate = frappe.copy_doc(draft).insert()
+
+		apply_workflow(draft, "Approve")
+		self.assertRaises(frappe.ValidationError, apply_workflow, duplicate, "Approve")
+
+		asset.load_from_db()
+		self.assertEqual(asset.finance_books[0].value_after_depreciation, 70000)
+
+	def test_disposal_refused_while_depreciation_entries_await_approval(self):
+		asset = create_asset(
+			item_code="Macbook Pro",
+			calculate_depreciation=1,
+			available_for_use_date="2019-12-31",
+			depreciation_start_date="2020-12-31",
+			frequency_of_depreciation=12,
+			total_number_of_depreciations=3,
+			expected_value_after_useful_life=10000,
+			submit=1,
+		)
+
+		post_depreciation_entries(date="2021-06-01")
+		self.assertRaises(frappe.ValidationError, scrap_asset, asset.name, "2021-06-01")
+
+		for entry in get_depreciation_entries(asset.name):
+			frappe.delete_doc("Journal Entry", entry.name)
+		scrap_asset(asset.name, "2021-06-01")
+		self.assertTrue(frappe.db.get_value("Asset", asset.name, "disposal_date"))
+
+
+def make_journal_entry_workflow():
+	workflow = frappe.get_doc(
+		{
+			"doctype": "Workflow",
+			"workflow_name": "_Test Journal Entry Approval",
+			"document_type": "Journal Entry",
+			"workflow_state_field": "workflow_state",
+			"is_active": 1,
+			"send_email_alert": 0,
+		}
+	)
+	workflow.append("states", {"state": "Pending", "allow_edit": "Accounts Manager"})
+	workflow.append("states", {"state": "Approved", "doc_status": 1, "allow_edit": "Accounts Manager"})
+	workflow.append(
+		"transitions",
+		{
+			"state": "Pending",
+			"action": "Approve",
+			"next_state": "Approved",
+			"allowed": "Accounts Manager",
+			"allow_self_approval": 1,
+		},
+	)
+	return workflow.insert(ignore_permissions=True)
+
+
+def get_depreciation_entries(asset_name):
+	je = frappe.qb.DocType("Journal Entry")
+	jea = frappe.qb.DocType("Journal Entry Account")
+	return (
+		frappe.qb.from_(je)
+		.join(jea)
+		.on(jea.parent == je.name)
+		.select(je.name, je.posting_date, je.docstatus)
+		.where(je.voucher_type == "Depreciation Entry")
+		.where(jea.reference_type == "Asset")
+		.where(jea.reference_name == asset_name)
+		.where(jea.debit > 0)
+		.orderby(je.posting_date)
+		.run(as_dict=True)
+	)
 
 
 def get_gl_entries(doctype, docname):

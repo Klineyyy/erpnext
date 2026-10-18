@@ -5,7 +5,7 @@
 import frappe
 from frappe import _
 from frappe.query_builder import Order
-from frappe.query_builder.functions import Max, Min
+from frappe.query_builder.functions import IfNull, Max, Min
 from frappe.utils import (
 	DateTimeLikeObject,
 	add_months,
@@ -241,6 +241,10 @@ def _make_journal_entry_for_depreciation(
 	if depr_schedule.journal_entry or getdate(depr_schedule.schedule_date) > getdate(date):
 		return
 
+	# a workflow keeps the entry in draft, and the row is linked only on submit
+	if has_draft_depreciation_entry(asset.name, depr_schedule.schedule_date, depr_schedule_doc.finance_book):
+		return
+
 	je = frappe.new_doc("Journal Entry")
 	setup_journal_entry_metadata(je, depr_schedule_doc, depr_series, depr_schedule, asset)
 
@@ -256,6 +260,46 @@ def _make_journal_entry_for_depreciation(
 
 	if not je.meta.get_workflow():
 		je.submit()
+
+
+def get_draft_depreciation_entries_query(asset_name):
+	je = frappe.qb.DocType("Journal Entry")
+	jea = frappe.qb.DocType("Journal Entry Account")
+	return (
+		frappe.qb.from_(je)
+		.join(jea)
+		.on(jea.parent == je.name)
+		.select(je.name)
+		.distinct()
+		.where(je.docstatus == 0)
+		.where(je.voucher_type == "Depreciation Entry")
+		.where(jea.reference_type == "Asset")
+		.where(jea.reference_name == asset_name)
+	)
+
+
+def has_draft_depreciation_entry(asset_name, posting_date, finance_book):
+	je = frappe.qb.DocType("Journal Entry")
+	return bool(
+		get_draft_depreciation_entries_query(asset_name)
+		.where(je.posting_date == posting_date)
+		.where(IfNull(je.finance_book, "") == (finance_book or ""))
+		.limit(1)
+		.run()
+	)
+
+
+def validate_no_draft_depreciation_entries(asset_doc):
+	if drafts := get_draft_depreciation_entries_query(asset_doc.name).run(pluck=True):
+		frappe.throw(
+			_(
+				"Asset {0} has depreciation entries awaiting approval: {1}. Submit or delete them before disposing of the asset."
+			).format(
+				get_link_to_form("Asset", asset_doc.name),
+				", ".join(get_link_to_form("Journal Entry", d) for d in drafts),
+			),
+			title=_("Pending Depreciation Entries"),
+		)
 
 
 def setup_journal_entry_metadata(je, depr_schedule_doc, depr_series, depr_schedule, asset):
@@ -494,6 +538,7 @@ def depreciate_asset(asset_doc, date, notes):
 	if not asset_doc.calculate_depreciation:
 		return
 
+	validate_no_draft_depreciation_entries(asset_doc)
 	reschedule_depreciation(asset_doc, notes, disposal_date=date)
 	make_depreciation_entry_on_disposal(asset_doc, date)
 
