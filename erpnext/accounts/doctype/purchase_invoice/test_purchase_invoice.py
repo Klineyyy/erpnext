@@ -706,6 +706,73 @@ class TestPurchaseInvoice(ERPNextTestSuite, StockTestMixin):
 			frappe.db.exists("GL Entry", {"account": exchange_gain_loss_account, "voucher_no": pi.name})
 		)
 
+	@ERPNextTestSuite.change_settings(
+		"Accounts Settings", {"allow_multi_currency_invoices_against_single_party_account": 1}
+	)
+	@ERPNextTestSuite.change_settings(
+		"System Settings",
+		{"number_format": "#,###.###", "currency_precision": "", "use_number_format_from_currency": 1},
+	)
+	def test_advance_equal_to_base_total_with_three_decimal_company_currency(self):
+		# company currency with 3 decimals (like KWD), invoice in USD with 2
+		company_currency = frappe.get_cached_value("Company", "_Test Company", "default_currency")
+		original_number_format = frappe.db.get_value("Currency", company_currency, "number_format")
+		frappe.db.set_value("Currency", company_currency, "number_format", "#,###.###")
+		self.addCleanup(
+			frappe.db.set_value, "Currency", company_currency, "number_format", original_number_format
+		)
+
+		jv = frappe.new_doc("Journal Entry")
+		jv.company = "_Test Company"
+		jv.posting_date = nowdate()
+		jv.append(
+			"accounts",
+			{
+				"account": "Creditors - _TC",
+				"party_type": "Supplier",
+				"party": "_Test Supplier",
+				"debit_in_account_currency": 3.071,
+				"is_advance": "Yes",
+				"cost_center": "_Test Cost Center - _TC",
+			},
+		)
+		jv.append(
+			"accounts",
+			{
+				"account": "Cash - _TC",
+				"credit_in_account_currency": 3.071,
+				"cost_center": "_Test Cost Center - _TC",
+			},
+		)
+		jv.submit()
+
+		pi = make_purchase_invoice(
+			currency="USD",
+			conversion_rate=0.3071,
+			rate=10,
+			price_list_rate=10,
+			qty=1,
+			do_not_save=True,
+		)
+		pi.disable_rounded_total = 1
+		pi.allocate_advances_automatically = 0
+		pi.append(
+			"advances",
+			{
+				"reference_type": "Journal Entry",
+				"reference_name": jv.name,
+				"reference_row": jv.accounts[0].name,
+				"advance_amount": 3.071,
+				"allocated_amount": 3.071,
+			},
+		)
+		pi.insert()
+		pi.submit()
+
+		self.assertEqual(pi.base_grand_total, 3.071)
+		self.assertEqual(pi.total_advance, 3.071)
+		self.assertEqual(pi.outstanding_amount, 0)
+
 	def test_purchase_invoice_with_exchange_rate_difference_for_non_stock_item(self):
 		from erpnext.stock.doctype.purchase_receipt.mapper import (
 			make_purchase_invoice as create_purchase_invoice,
