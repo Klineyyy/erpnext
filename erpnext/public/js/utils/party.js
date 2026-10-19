@@ -140,6 +140,33 @@ erpnext.utils.add_item = function (frm) {
 	}
 };
 
+// same precedence as get_tax_withholding_category() in get_item_details.py: the item's own category, else the party's
+erpnext.utils.set_item_tax_withholding_category = function (frm, item_category_field) {
+	const items = (frm.doc.items || []).filter((row) => row.item_code);
+	if (!items.length) return;
+
+	const item_codes = [...new Set(items.map((row) => row.item_code))];
+	return frappe.db
+		.get_list("Item", {
+			filters: { name: ["in", item_codes] },
+			fields: ["name", item_category_field],
+			limit: item_codes.length,
+		})
+		.then((item_details) => {
+			const item_categories = Object.fromEntries(
+				item_details.map((item) => [item.name, item[item_category_field]])
+			);
+			for (const row of items) {
+				frappe.model.set_value(
+					row.doctype,
+					row.name,
+					"tax_withholding_category",
+					item_categories[row.item_code] || frm.tax_withholding_category || ""
+				);
+			}
+		});
+};
+
 erpnext.utils.get_address_display = function (frm, address_field, display_field, is_your_company_address) {
 	if (frm.updating_party_details) return;
 

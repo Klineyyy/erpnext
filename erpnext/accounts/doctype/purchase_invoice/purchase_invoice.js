@@ -381,6 +381,7 @@ erpnext.accounts.PurchaseInvoice = class PurchaseInvoice extends erpnext.buying.
 				me.frm.doc.apply_tds =
 					me.frm.tax_withholding_category || me.frm.tax_withholding_group ? 1 : 0;
 				me.frm.clear_table("tax_withholding_entries");
+				erpnext.utils.set_item_tax_withholding_category(me.frm, "purchase_tax_withholding_category");
 
 				// while duplicating, don't change payment terms
 				if (me.frm.doc.__run_link_triggers === false) {

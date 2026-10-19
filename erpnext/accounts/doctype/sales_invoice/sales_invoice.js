@@ -505,6 +505,7 @@ erpnext.accounts.SalesInvoiceController = class SalesInvoiceController extends (
 				me.frm.doc.apply_tds =
 					me.frm.tax_withholding_category || me.frm.tax_withholding_group ? 1 : 0;
 				me.frm.clear_table("tax_withholding_entries");
+				erpnext.utils.set_item_tax_withholding_category(me.frm, "sales_tax_withholding_category");
 				me.apply_pricing_rule();
 			}
 		);
