@@ -625,13 +625,7 @@ def apply_pricing_rule_on_transaction(doc):
 								# Set the condition_met variable to True and break out of the loop
 								condition_met = True
 								break
-
-							else:
-								# reset discount if not linked
-								doc.set(field, 0)
-						else:
-							# if coupon code based but no coupon code selected
-							doc.set(field, 0)
+						# without its coupon the rule is not applied, so a manual discount is kept
 
 				if has_rule_discount and fields_set:
 					# clear the discount set by the previously applied rule which this rule does not set

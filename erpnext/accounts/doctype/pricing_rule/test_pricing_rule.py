@@ -1234,6 +1234,59 @@ class TestPricingRule(ERPNextTestSuite):
 		self.assertEqual(si.discount_amount, 30)
 		self.assertEqual(si.grand_total, 470)
 
+	def test_manual_transaction_discount_retained_with_coupon_based_pricing_rule(self):
+		frappe.delete_doc_if_exists("Pricing Rule", "_Test Pricing Rule")
+		pricing_rule = make_pricing_rule(
+			selling=1,
+			apply_on="Transaction",
+			price_or_product_discount="Price",
+			discount_percentage=50,
+		)
+		pricing_rule.db_set("coupon_code_based", 1)
+
+		# no coupon selected, so the rule does not apply and the user's discount stays as entered
+		si = create_sales_invoice(qty=1, rate=3000, do_not_save=True)
+		si.additional_discount_percentage = 50
+		si.insert()
+		self.assertEqual(si.additional_discount_percentage, 50)
+		self.assertEqual(si.discount_amount, 1500)
+		self.assertEqual(si.grand_total, 1500)
+
+		si.save()
+		self.assertEqual(si.additional_discount_percentage, 50)
+		self.assertEqual(si.discount_amount, 1500)
+
+	def test_coupon_transaction_discount_removed_with_coupon(self):
+		frappe.delete_doc_if_exists("Pricing Rule", "_Test Pricing Rule")
+		pricing_rule = make_pricing_rule(
+			selling=1,
+			apply_on="Transaction",
+			price_or_product_discount="Price",
+			discount_percentage=10,
+		)
+		pricing_rule.db_set("coupon_code_based", 1)
+		frappe.delete_doc_if_exists("Coupon Code", "_Test Transaction Coupon")
+		frappe.get_doc(
+			{
+				"doctype": "Coupon Code",
+				"coupon_name": "_Test Transaction Coupon",
+				"coupon_code": "_Test Transaction Coupon",
+				"pricing_rule": pricing_rule.name,
+			}
+		).insert()
+
+		si = create_sales_invoice(qty=5, rate=100, do_not_save=True)
+		si.coupon_code = "_Test Transaction Coupon"
+		si.insert()
+		self.assertEqual(si.additional_discount_percentage, 10)
+		self.assertEqual(si.grand_total, 450)
+
+		si.coupon_code = None
+		si.save()
+		self.assertEqual(si.additional_discount_percentage, 0)
+		self.assertEqual(si.discount_amount, 0)
+		self.assertEqual(si.grand_total, 500)
+
 	def test_remove_pricing_rule(self):
 		item = make_item("Water Flask")
 		make_item_price("Water Flask", "_Test Price List", 100)
